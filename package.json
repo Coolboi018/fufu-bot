@@ -4,7 +4,8 @@
   "description": "A Discord music bot that plays from YouTube and Spotify",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "npm install --verbose"
   },
   "dependencies": {
     "@discordjs/voice": "^0.14.0",
