@@ -1,145 +1,204 @@
 import express from "express";
-import { Client, GatewayIntentBits } from "discord.js";
-import { 
-  createAudioPlayer, 
-  createAudioResource, 
-  joinVoiceChannel, 
-  AudioPlayerStatus, 
-  NoSubscriberBehavior 
+import {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder
+} from "discord.js";
+import {
+  joinVoiceChannel,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  NoSubscriberBehavior
 } from "@discordjs/voice";
 import play from "play-dl";
 import dotenv from "dotenv";
 dotenv.config();
 
-// Web server for Render keep-alive
-const app = express();
-const PORT = process.env.PORT || 10000;
-app.get("/", (req, res) => res.send("🌐 Web server running for Render"));
-app.listen(PORT, () => console.log("🌐 Web server running for Render"));
+// 🧩 Load YouTube cookies if available
+(async () => {
+  try {
+    if (process.env.YT_COOKIES) {
+      await play.setCookies(process.env.YT_COOKIES);
+      console.log("✅ YouTube cookies loaded!");
+    } else {
+      console.warn("⚠️ No YT_COOKIES found — YouTube playback may fail.");
+    }
+  } catch (err) {
+    console.error("Cookie load error:", err);
+  }
+})();
 
-const bot = new Client({
+const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ],
 });
 
+const prefix = "!";
 const queue = new Map();
+const app = express();
 
-bot.once("ready", () => console.log(`✅ Logged in as ${bot.user.tag}`));
+// keep-alive web server
+app.get("/", (_, res) => res.send("Bot is alive!"));
+app.listen(3000, () => console.log("🌐 Keep-alive server running on port 3000"));
 
-bot.on("messageCreate", async (message) => {
-  if (!message.content.startsWith("!") || message.author.bot) return;
-  const args = message.content.trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.content.startsWith(prefix)) return;
+
+  const args = message.content.slice(prefix.length).trim().split(/ +/);
+  const cmd = args.shift().toLowerCase();
   const serverQueue = queue.get(message.guild.id);
 
-  if (command === "!play") {
-    const query = args.join(" ");
-    if (!query) return message.reply("❌ Please provide a song name or YouTube link!");
-
+  if (cmd === "play") {
     const voiceChannel = message.member?.voice?.channel;
-    if (!voiceChannel) return message.reply("🎧 Join a voice channel first!");
+    if (!voiceChannel) return message.reply("❌ Join a voice channel first!");
+
+    const permissions = voiceChannel.permissionsFor(message.client.user);
+    if (!permissions.has("Connect") || !permissions.has("Speak"))
+      return message.reply("❌ I don’t have permission to join/speak.");
+
+    let songInfo;
+    let song;
 
     try {
-      // ⚙️ Handle both YouTube links and search queries
-      let yt_info;
-      if (play.yt_validate(query) === "video") {
-        yt_info = await play.video_info(query);
-      } else {
-        const search = await play.search(query, { limit: 1 });
-        yt_info = search[0];
-      }
+      const query = args.join(" ");
+      if (!query) return message.reply("🎵 Provide a song name or link!");
 
-      if (!yt_info) return message.reply("❌ Song not found!");
-
-      const song = { title: yt_info.title, url: yt_info.url };
-
-      if (!serverQueue) {
-        const queueConstruct = {
-          voiceChannel,
-          connection: null,
-          songs: [],
-          player: createAudioPlayer({
-            behaviors: { noSubscriber: NoSubscriberBehavior.Pause },
-          }),
-          playing: true,
-        };
-
-        queue.set(message.guild.id, queueConstruct);
-        queueConstruct.songs.push(song);
-
-        try {
-          const connection = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: message.guild.id,
-            adapterCreator: message.guild.voiceAdapterCreator,
-          });
-          queueConstruct.connection = connection;
-          playSong(message.guild, queueConstruct.songs[0], message);
-        } catch (err) {
-          console.error(err);
-          queue.delete(message.guild.id);
-          return message.reply("⚠️ Couldn't join voice channel.");
-        }
-      } else {
-        serverQueue.songs.push(song);
-        return message.reply(`🎶 Added to queue: **${song.title}**`);
-      }
+      let source = await play.search(query, { limit: 1 });
+      if (source.length === 0) return message.reply("❌ No results found!");
+      songInfo = source[0];
+      song = {
+        title: songInfo.title,
+        url: songInfo.url
+      };
     } catch (err) {
-      console.error("Error fetching video:", err);
-      return message.reply("❌ Couldn't play that song. Try another one!");
+      console.error(err);
+      return message.reply("⚠️ Error finding song!");
+    }
+
+    if (!serverQueue) {
+      const queueConstruct = {
+        textChannel: message.channel,
+        voiceChannel: message.member.voice.channel,
+        connection: null,
+        songs: [],
+        player: createAudioPlayer({
+          behaviors: { noSubscriber: NoSubscriberBehavior.Stop },
+        }),
+        loop: false,
+      };
+
+      queue.set(message.guild.id, queueConstruct);
+      queueConstruct.songs.push(song);
+
+      try {
+        const connection = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: voiceChannel.guild.id,
+          adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        });
+        queueConstruct.connection = connection;
+        playSong(message.guild, queueConstruct.songs[0]);
+      } catch (err) {
+        console.error(err);
+        queue.delete(message.guild.id);
+        return message.reply("❌ Error connecting to voice channel!");
+      }
+    } else {
+      serverQueue.songs.push(song);
+      return message.reply(`🎶 **${song.title}** added to the queue!`);
     }
   }
 
-  if (command === "!skip") skipSong(message, serverQueue);
-  if (command === "!stop") stopSong(message, serverQueue);
+  if (cmd === "skip") {
+    if (!serverQueue) return message.reply("❌ No songs to skip!");
+    serverQueue.player.stop();
+    message.reply("⏭️ Skipped!");
+  }
+
+  if (cmd === "stop") {
+    if (!serverQueue) return message.reply("❌ Nothing to stop!");
+    serverQueue.songs = [];
+    serverQueue.player.stop();
+    message.reply("⏹️ Stopped!");
+  }
+
+  if (cmd === "pause") {
+    if (!serverQueue) return message.reply("❌ Nothing is playing!");
+    serverQueue.player.pause();
+    message.reply("⏸️ Paused!");
+  }
+
+  if (cmd === "resume") {
+    if (!serverQueue) return message.reply("❌ Nothing to resume!");
+    serverQueue.player.unpause();
+    message.reply("▶️ Resumed!");
+  }
+
+  if (cmd === "leave") {
+    if (!serverQueue) return message.reply("❌ Not connected!");
+    serverQueue.voiceChannel.leave();
+    queue.delete(message.guild.id);
+    message.reply("👋 Left the channel!");
+  }
+
+  if (cmd === "queue") {
+    if (!serverQueue || !serverQueue.songs.length)
+      return message.reply("🎶 Queue is empty!");
+    const list = serverQueue.songs
+      .map((s, i) => `${i + 1}. ${s.title}`)
+      .join("\n");
+    message.reply("🎵 **Current Queue:**\n" + list);
+  }
+
+  if (cmd === "loop") {
+    if (!serverQueue) return message.reply("❌ Nothing is playing!");
+    serverQueue.loop = !serverQueue.loop;
+    message.reply(`🔁 Loop is now **${serverQueue.loop ? "ON" : "OFF"}**`);
+  }
 });
 
-async function playSong(guild, song, message) {
+async function playSong(guild, song) {
   const serverQueue = queue.get(guild.id);
   if (!song) {
-    if (serverQueue?.connection) serverQueue.connection.destroy();
-    queue.delete(guild.id);
+    setTimeout(() => {
+      if (serverQueue && serverQueue.connection) {
+        serverQueue.connection.destroy();
+        queue.delete(guild.id);
+        console.log("💤 Auto-disconnected due to inactivity.");
+      }
+    }, 30000);
     return;
   }
 
   try {
-    const stream = await play.stream(song.url, { quality: 2 });
-    const resource = createAudioResource(stream.stream, { inputType: stream.type });
-    const player = serverQueue.player;
-    player.play(resource);
-    serverQueue.connection.subscribe(player);
-
-    player.on(AudioPlayerStatus.Idle, () => {
-      serverQueue.songs.shift();
-      playSong(guild, serverQueue.songs[0], message);
+    const stream = await play.stream(song.url);
+    const resource = createAudioResource(stream.stream, {
+      inputType: stream.type,
     });
 
-    message.channel.send(`🎵 Now playing: **${song.title}**`);
-  } catch (err) {
-    console.error("Playback error:", err);
-    message.channel.send("⚠️ Skipping broken song...");
+    serverQueue.player.play(resource);
+    serverQueue.connection.subscribe(serverQueue.player);
+
+    serverQueue.textChannel.send(`🎶 Now playing: **${song.title}**`);
+
+    serverQueue.player.on(AudioPlayerStatus.Idle, () => {
+      if (!serverQueue.loop) serverQueue.songs.shift();
+      playSong(guild, serverQueue.songs[0]);
+    });
+  } catch (error) {
+    console.error(error);
     serverQueue.songs.shift();
-    playSong(guild, serverQueue.songs[0], message);
+    playSong(guild, serverQueue.songs[0]);
   }
 }
 
-function skipSong(message, serverQueue) {
-  if (!serverQueue) return message.reply("❌ No song is playing.");
-  serverQueue.player.stop();
-  message.channel.send("⏭️ Skipped!");
-}
-
-function stopSong(message, serverQueue) {
-  if (!serverQueue) return message.reply("❌ No song is playing.");
-  serverQueue.songs = [];
-  serverQueue.player.stop();
-  serverQueue.connection.destroy();
-  queue.delete(message.guild.id);
-  message.channel.send("🛑 Stopped the music!");
-}
-
-bot.login(process.env.TOKEN);
+client.login(process.env.DISCORD_TOKEN);
