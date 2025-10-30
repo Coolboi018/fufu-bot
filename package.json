@@ -8,7 +8,7 @@
     "start": "node src/index.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "@discordjs/voice": "0.16.0",
@@ -18,6 +18,7 @@
     "spotify-web-api-node": "5.0.2",
     "ytdl-core": "4.11.5",
     "youtube-sr": "4.3.11",
-    "youtubei.js": "9.1.0"
+    "youtubei.js": "9.1.0",
+    "libsodium-wrappers": "0.7.13"
   }
 }
