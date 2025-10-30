@@ -3,55 +3,94 @@ import playdl from "play-dl";
 import { Track } from "./queue.js";
 import YoutubeSR from "youtube-sr";
 
-// Extract QueryType from the default export (since youtube-sr is CommonJS)
 const { QueryType } = YoutubeSR;
 
+// Optional: set YouTube cookie from env to avoid rate limits (paste your cookie string in Render env YT_COOKIE)
+if (process.env.YT_COOKIE) {
+  try {
+    await playdl.setToken({
+      youtube: {
+        cookie: process.env.YT_COOKIE
+      }
+    });
+    console.log("[YouTube] Cookie set for play-dl");
+  } catch (e) {
+    console.warn("[YouTube] Failed to set cookie:", e.message);
+  }
+}
+
 export async function resolveYouTube(input, requestedBy) {
-  // Input could be: direct YouTube URL, playlist URL, or search query
+  // Direct YouTube URL
   if (ytdl.validateURL(input)) {
     const info = await ytdl.getInfo(input);
     const details = info.videoDetails;
-    return [new Track({
-      title: details.title,
-      url: details.video_url,
-      duration: formatDuration(details.lengthSeconds),
-      source: "youtube",
-      requestedBy
-    })];
+    return [
+      new Track({
+        title: details.title,
+        url: details.video_url,
+        duration: formatDuration(details.lengthSeconds),
+        source: "youtube",
+        requestedBy
+      })
+    ];
   }
 
-  // Playlist URL (play-dl handles many formats)
-  if (await playdl.playlist_validate(input) === "yt_playlist") {
+  // YouTube playlist
+  const playlistType = await playdl.playlist_validate(input).catch(() => "error");
+  if (playlistType === "yt_playlist") {
     const playlist = await playdl.playlist_info(input, { incomplete: true });
     const videos = await playlist.all_videos();
-    const tracks = videos.map(v => new Track({
-      title: v.title,
-      url: `https://www.youtube.com/watch?v=${v.id}`,
-      duration: v.durationInSec ? formatDuration(v.durationInSec) : "Unknown",
-      source: "youtube",
-      requestedBy
-    }));
+    const tracks = videos.map((v) => {
+      return new Track({
+        title: v.title,
+        url: `https://www.youtube.com/watch?v=${v.id}`,
+        duration: v.durationInSec ? formatDuration(v.durationInSec) : "Unknown",
+        source: "youtube",
+        requestedBy
+      });
+    });
     return tracks;
   }
 
   // Search query
   const results = await YoutubeSR.search(input, { type: QueryType.VIDEO, limit: 1 });
-  if (results.length === 0) {
-    return [];
-  }
+  if (!results.length) return [];
   const v = results[0];
-  return [new Track({
-    title: v.title,
-    url: `https://www.youtube.com/watch?v=${v.id}`,
-    duration: v.durationFormatted || "Unknown",
-    source: "youtube",
-    requestedBy
-  })];
+  return [
+    new Track({
+      title: v.title,
+      url: `https://www.youtube.com/watch?v=${v.id}`,
+      duration: v.durationFormatted || "Unknown",
+      source: "youtube",
+      requestedBy
+    })
+  ];
 }
 
-export function makeYouTubeStream(url) {
-  // Use play-dl if possible (better resilience), fallback to ytdl-core
-  return playdl.stream(url).catch(() => null);
+// Returns either a play-dl stream (preferred) or a ytdl-core stream as fallback.
+// The player will probe ytdl streams to detect the input type automatically.
+export async function makeYouTubeStream(url) {
+  // Try play-dl first
+  try {
+    const s = await playdl.stream(url);
+    return { stream: s.stream, type: s.type, via: "playdl" };
+  } catch (e) {
+    console.warn(`[Stream] play-dl failed, falling back to ytdl-core: ${e.message}`);
+  }
+
+  // Fallback to ytdl-core
+  try {
+    const ytdlStream = ytdl(url, {
+      quality: "highestaudio",
+      filter: "audioonly",
+      dlChunkSize: 0,
+      highWaterMark: 1 << 25
+    });
+    return { stream: ytdlStream, type: null, via: "ytdl" };
+  } catch (e) {
+    console.error("[Stream] ytdl-core fallback failed:", e);
+    return null;
+  }
 }
 
 function formatDuration(seconds) {
