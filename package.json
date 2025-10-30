@@ -1,0 +1,22 @@
+{
+  "name": "discord-music-bot-render",
+  "version": "1.0.0",
+  "description": "Discord music bot for YouTube and Spotify with free Render hosting",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.16.0",
+    "discord.js": "^14.15.3",
+    "express": "^4.19.2",
+    "play-dl": "^1.9.7",
+    "spotify-web-api-node": "^5.0.2",
+    "ytdl-core": "^4.12.2",
+    "youtube-sr": "^4.3.11"
+  }
+}
