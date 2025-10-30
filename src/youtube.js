@@ -5,13 +5,11 @@ import YoutubeSR from "youtube-sr";
 
 const { QueryType } = YoutubeSR;
 
-// Optional: set YouTube cookie from env to avoid rate limits (paste your cookie string in Render env YT_COOKIE)
+// If you’ve set YT_COOKIE in Render env vars, pass it to play-dl
 if (process.env.YT_COOKIE) {
   try {
     await playdl.setToken({
-      youtube: {
-        cookie: process.env.YT_COOKIE
-      }
+      youtube: { cookie: process.env.YT_COOKIE }
     });
     console.log("[YouTube] Cookie set for play-dl");
   } catch (e) {
@@ -35,21 +33,18 @@ export async function resolveYouTube(input, requestedBy) {
     ];
   }
 
-  // YouTube playlist
+  // Playlist URL
   const playlistType = await playdl.playlist_validate(input).catch(() => "error");
   if (playlistType === "yt_playlist") {
     const playlist = await playdl.playlist_info(input, { incomplete: true });
     const videos = await playlist.all_videos();
-    const tracks = videos.map((v) => {
-      return new Track({
-        title: v.title,
-        url: `https://www.youtube.com/watch?v=${v.id}`,
-        duration: v.durationInSec ? formatDuration(v.durationInSec) : "Unknown",
-        source: "youtube",
-        requestedBy
-      });
-    });
-    return tracks;
+    return videos.map(v => new Track({
+      title: v.title,
+      url: `https://www.youtube.com/watch?v=${v.id}`,
+      duration: v.durationInSec ? formatDuration(v.durationInSec) : "Unknown",
+      source: "youtube",
+      requestedBy
+    }));
   }
 
   // Search query
@@ -67,22 +62,26 @@ export async function resolveYouTube(input, requestedBy) {
   ];
 }
 
-// Returns either a play-dl stream (preferred) or a ytdl-core stream as fallback.
-// The player will probe ytdl streams to detect the input type automatically.
+// Create a stream for playback
 export async function makeYouTubeStream(url) {
   // Try play-dl first
   try {
     const s = await playdl.stream(url);
     return { stream: s.stream, type: s.type, via: "playdl" };
   } catch (e) {
-    console.warn(`[Stream] play-dl failed, falling back to ytdl-core: ${e.message}`);
+    console.warn(`[Stream] play-dl failed: ${e.message}`);
   }
 
-  // Fallback to ytdl-core
+  // Fallback to ytdl-core with cookie
   try {
     const ytdlStream = ytdl(url, {
       quality: "highestaudio",
       filter: "audioonly",
+      requestOptions: {
+        headers: {
+          cookie: process.env.YT_COOKIE || ""
+        }
+      },
       dlChunkSize: 0,
       highWaterMark: 1 << 25
     });
