@@ -143,7 +143,4 @@ export class GuildAudioController {
     this.clearAutoLeave();
     if (this.connection) {
       this.connection.destroy();
-      this.connection = null;
-    }
-  }
-}
+      this.connection
