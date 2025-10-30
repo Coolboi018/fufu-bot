@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: discord-music-bot
-    env: node
-    buildCommand: "npm install --verbose"
-    startCommand: "npm start"
-    envVars:
-      - key: NODE_VERSION
-        value: 20.9.0
