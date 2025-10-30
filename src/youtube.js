@@ -48,8 +48,11 @@ export async function resolveYouTube(input, requestedBy) {
   }
 
   // Search query
-  const results = await YoutubeSR.search(input, { type: QueryType.VIDEO, limit: 1 });
-  if (!results.length) return [];
+  const results = await YoutubeSR.search(input, { type: QueryType.VIDEO, limit: 1 }).catch(() => []);
+  if (!results.length) {
+    console.warn(`[YouTube] No results for query: ${input}`);
+    return [];
+  }
   const v = results[0];
   return [
     new Track({
