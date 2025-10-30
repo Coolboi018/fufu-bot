@@ -19,7 +19,11 @@ dotenv.config();
 (async () => {
   try {
     if (process.env.YT_COOKIES) {
-      await play.setCookies(process.env.YT_COOKIES);
+      await play.setToken({
+  youtube: {
+    cookie: process.env.YT_COOKIE
+  }
+});
       console.log("✅ YouTube cookies loaded!");
     } else {
       console.warn("⚠️ No YT_COOKIES found — YouTube playback may fail.");
