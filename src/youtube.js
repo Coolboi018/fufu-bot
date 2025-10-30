@@ -34,8 +34,8 @@ export async function resolveYouTube(input, requestedBy) {
   }
 
   // Playlist URL
-  const playlistType = await playdl.playlist_validate(input).catch(() => "error");
-  if (playlistType === "yt_playlist") {
+  const validation = await playdl.validate(input).catch(() => "error");
+  if (validation === "yt_playlist") {
     const playlist = await playdl.playlist_info(input, { incomplete: true });
     const videos = await playlist.all_videos();
     return videos.map(v => new Track({
