@@ -62,7 +62,7 @@ export class GuildAudioController {
         inputType: streamObj.type
       });
     } else {
-      // ytdl-core fallback: probe the stream to determine type (Opus/WebM)
+      // ytdl-core fallback: probe the stream to detect type
       const probe = await demuxProbe(streamObj.stream);
       resource = createAudioResource(probe.stream, {
         inputType: probe.type
