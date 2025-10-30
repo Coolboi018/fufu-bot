@@ -1,7 +1,10 @@
 import ytdl from "ytdl-core";
 import playdl from "play-dl";
 import { Track } from "./queue.js";
-import { QueryType, default as YoutubeSR } from "youtube-sr";
+import YoutubeSR from "youtube-sr";
+
+// Extract QueryType from the default export (since youtube-sr is CommonJS)
+const { QueryType } = YoutubeSR;
 
 export async function resolveYouTube(input, requestedBy) {
   // Input could be: direct YouTube URL, playlist URL, or search query
