@@ -16,7 +16,7 @@
     "express": "^4.19.2",
     "play-dl": "^1.9.7",
     "spotify-web-api-node": "^5.0.2",
-    "ytdl-core": "^4.12.2",
+    "ytdl-core": "^4.11.5",
     "youtube-sr": "^4.3.11"
   }
 }
