@@ -9,7 +9,9 @@ import playdl from "play-dl";
 
 // Start a minimal web server for Render
 makeWeb();
-
+// Force load native voice dependencies
+import "libsodium-wrappers";
+import "@discordjs/opus";
 // Discord client
 const client = new Client({
   intents: [
