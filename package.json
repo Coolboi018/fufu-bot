@@ -1,0 +1,20 @@
+json
+{
+"name": "discord-music-bot-render",
+"version": "1.0.0",
+"description": "Discord music bot for Render (YouTube + Spotify via play-dl)",
+"main": "index.js",
+"scripts": {
+"start": "node index.js"
+},
+"engines": {
+"node": ">=18"
+},
+"dependencies": {
+"discord.js": "^14.11.0",
+"@discordjs/voice": "^0.18.0",
+"play-dl": "^1.10.0",
+"express": "^4.18.2",
+"dotenv": "^16.0.3"
+}
+}
