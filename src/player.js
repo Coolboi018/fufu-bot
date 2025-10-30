@@ -57,12 +57,10 @@ export class GuildAudioController {
 
     let resource;
     if (streamObj.type) {
-      // play-dl provides type (usually StreamType.Opus)
       resource = createAudioResource(streamObj.stream, {
         inputType: streamObj.type
       });
     } else {
-      // ytdl-core fallback: probe the stream to detect type
       const probe = await demuxProbe(streamObj.stream);
       resource = createAudioResource(probe.stream, {
         inputType: probe.type
@@ -114,7 +112,7 @@ export class GuildAudioController {
       await this.play(next);
     } catch (e) {
       console.error("[Audio] Next track failed:", e.message);
-      this.onIdle(); // try advancing again if a track fails
+      this.onIdle();
     }
   }
 
@@ -133,7 +131,7 @@ export class GuildAudioController {
   }
 
   skip() {
-    this.player.stop(true); // triggers onIdle -> plays next
+    this.player.stop(true);
   }
 
   leave() {
