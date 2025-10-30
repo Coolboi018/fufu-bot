@@ -5,7 +5,8 @@ import {
   createAudioResource,
   AudioPlayerStatus,
   VoiceConnectionStatus,
-  entersState
+  entersState,
+  demuxProbe
 } from "@discordjs/voice";
 import { makeYouTubeStream } from "./youtube.js";
 import { AUTO_LEAVE_MS } from "./config.js";
@@ -51,13 +52,23 @@ export class GuildAudioController {
   }
 
   async play(track) {
-    // Resolve YouTube stream from track.url
-    const stream = await makeYouTubeStream(track.url);
-    if (!stream) throw new Error("Failed to create stream");
+    const streamObj = await makeYouTubeStream(track.url);
+    if (!streamObj) throw new Error("Failed to create stream");
 
-    const resource = createAudioResource(stream.stream, {
-      inputType: stream.type
-    });
+    let resource;
+    if (streamObj.type) {
+      // play-dl provides type (usually StreamType.Opus)
+      resource = createAudioResource(streamObj.stream, {
+        inputType: streamObj.type
+      });
+    } else {
+      // ytdl-core fallback: probe the stream to determine type (Opus/WebM)
+      const probe = await demuxProbe(streamObj.stream);
+      resource = createAudioResource(probe.stream, {
+        inputType: probe.type
+      });
+    }
+
     this.currentResource = resource;
     this.player.play(resource);
   }
@@ -86,17 +97,25 @@ export class GuildAudioController {
   }
 
   async onIdle() {
-    // If loop is enabled, re-play current
     if (this.queue.getLoop() && this.queue.current) {
-      await this.play(this.queue.current);
-      return;
+      try {
+        await this.play(this.queue.current);
+        return;
+      } catch (e) {
+        console.error("[Audio] Replay failed:", e.message);
+      }
     }
     const next = this.queue.next();
     if (!next) {
       this.scheduleAutoLeave();
       return;
     }
-    await this.play(next);
+    try {
+      await this.play(next);
+    } catch (e) {
+      console.error("[Audio] Next track failed:", e.message);
+      this.onIdle(); // try advancing again if a track fails
+    }
   }
 
   pause() {
