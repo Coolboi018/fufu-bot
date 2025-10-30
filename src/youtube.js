@@ -5,7 +5,7 @@ import YoutubeSR from "youtube-sr";
 
 const { QueryType } = YoutubeSR;
 
-// If you’ve set YT_COOKIE in Render env vars, pass it to play-dl
+// If YT_COOKIE is set in Render env vars, pass it to play-dl
 if (process.env.YT_COOKIE) {
   try {
     await playdl.setToken({
