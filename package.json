@@ -1,19 +1,17 @@
 {
-  "name": "discord-music-bot-render",
+  "name": "fufu-bot",
   "version": "1.0.0",
-  "description": "Discord music bot for Render (YouTube + Spotify via play-dl)",
+  "description": "Discord Music Bot for YouTube & Spotify",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
   "dependencies": {
-    "discord.js": "^14.11.0",
-    "@discordjs/voice": "^0.18.0",
-    "play-dl": "^1.9.7",
-    "express": "^4.18.2",
-    "dotenv": "^16.0.3"
+    "@discordjs/voice": "^1.8.0",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "play-dl": "^1.9.7"
   }
 }
