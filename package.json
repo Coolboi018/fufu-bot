@@ -1,16 +1,13 @@
 {
-  "name": "fufu-bot",
+  "name": "discord-music-bot",
   "version": "1.0.0",
-  "description": "Discord music bot for YouTube & Spotify",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
- "dependencies": {
-  "discord.js": "^14.15.3",
-  "@discordjs/voice": "^0.17.0",
-  "play-dl": "^1.9.7",
-  "express": "^4.21.1"
-}
+  "dependencies": {
+    "discord.js": "^14.11.0",
+    "play-dl": "^1.9.7",
+    "dotenv": "^16.3.1"
+  }
 }
