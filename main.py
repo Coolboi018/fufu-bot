@@ -13,10 +13,11 @@ import google.generativeai as genai
 
 # Optional Spotify support
 try:
-    import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials
-except Exception:
+    import spotipy  # type: ignore
+    from spotipy.oauth2 import SpotifyClientCredentials  # type: ignore
+except ImportError:
     spotipy = None
+    SpotifyClientCredentials = None
 
 # Configure Gemini AI
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY') or 'GEMINI_API_KEY'
@@ -46,7 +47,6 @@ ytdl_opts = {
     'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
     'socket_timeout': 60,
     'retries': 5,
@@ -116,9 +116,9 @@ async def on_ready():
 async def generate_ai_response(message_content, author_name):
     """Generate an AI response using Google Gemini"""
     try:
-        prompt = f"""You are Fufu, a cute and friendly Discord music bot with a kawaii personality.
-        You love singing, music, and talking to server members. Respond in a cute, friendly way with emojis.
-        Keep responses short and engaging. You're helpful but playful.
+        prompt = f"""You are Fufu, a Discord music bot with a full range of emotions.
+        You love music and interacting with server members, but you're not always cute or happy. Express emotions naturally and intensely based on the user's message - you can be happy, sad, angry, excited, frustrated, sarcastic, or any emotion that fits the context. Don't shy away from anger or excitement; show them strongly when appropriate.
+        Respond with emojis and keep responses short and engaging. You're helpful but can be blunt or moody.
 
         User {author_name} said: {message_content}
 
@@ -128,7 +128,7 @@ async def generate_ai_response(message_content, author_name):
         return response.text.strip()
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
-        return "💖 Fufu~ I'm having trouble thinking right now, senpai! Let's sing instead~ 🎤"
+        return "💥 Fufu here. Having issues right now. Let's just play some music instead. 🎤"
 
 @bot.event
 async def on_message(message):
@@ -185,7 +185,7 @@ def get_spotify_track_queries(spotify_url):
 
     client_id = os.getenv("SPOTIFY_CLIENT_ID")
     client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-    if not spotipy or not client_id or not client_secret:
+    if not spotipy or not SpotifyClientCredentials or not client_id or not client_secret:
         return queries
 
     try:
@@ -277,11 +277,11 @@ async def play(ctx, *, query):
 
                 if queries:
                     await ctx.send(
-                        f"🎤 Spotify link detected! Adding {len(queries)} tracks to my playlist, senpai~ 💖"
+                        f"🎤 Spotify link detected! Adding {len(queries)} tracks to my playlist."
                     )
                     added = 0
                     for q in queries:
-                        search_q = f"ytsearch:{q} official audio"
+                        search_q = f"ytsearch:{q}"
                         try:
                             player = await YTDLSource.from_url(search_q,
                                                                loop=bot.loop)
@@ -293,7 +293,7 @@ async def play(ctx, *, query):
 
                     if added == 0:
                         await ctx.send(
-                            "💔 Couldn't find any tracks on YouTube for that Spotify link, senpai~ 😢"
+                            "💔 Couldn't find any tracks on YouTube for that Spotify link."
                         )
                         return
                     embed = Embed(title="💖 Added to Queue", description=f"Added **{added}** tracks from Spotify! Let's sing together~ 🎤", color=0xff69b4)
@@ -302,10 +302,10 @@ async def play(ctx, *, query):
                     title = extract_spotify_title(query)
                     if not title:
                         await ctx.send(
-                            "💔 Couldn't extract song name from Spotify link, senpai~ Try giving the song name instead! 💖"
+                            "💔 Couldn't extract song name from Spotify link. Try giving the song name instead!"
                         )
                         return
-                    search_q = f"ytsearch:{title} official audio"
+                    search_q = f"ytsearch:{title}"
                     player = await YTDLSource.from_url(search_q, loop=bot.loop)
                     music_queues[guild_id].append(player)
                     embed = Embed(title="💖 Added to Queue", description=f"**{player.title}**", color=0xff69b4)
