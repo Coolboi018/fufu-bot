@@ -4,3 +4,5 @@ yt-dlp
 google-generativeai
 requests
 spotipy
+youtube-search-python
+youtube-search
