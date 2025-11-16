@@ -11,6 +11,9 @@ import requests
 import logging
 import google.generativeai as genai
 
+# Conversation history for temporary memory (per user, last 20 messages)
+conversation_history = {}
+
 # Optional Spotify support
 try:
     import spotipy  # type: ignore
@@ -113,22 +116,26 @@ async def on_ready():
 # Removed command error handling to avoid discord.py 2.x compatibility issues
 # The bot will work fine without custom error handling for unknown commands
 
-async def generate_ai_response(message_content, author_name):
-    """Generate an AI response using Google Gemini"""
+async def generate_ai_response(message_content, author_name, history):
+    """Generate an AI response using Google Gemini with conversation history"""
     try:
-        prompt = f"""You are Fufu, a Discord music bot with a full range of emotions.
-        You love music and interacting with server members, but you're not always cute or happy. Express emotions naturally and intensely based on the user's message - you can be happy, sad, angry, excited, frustrated, sarcastic, or any emotion that fits the context. Don't shy away from anger or excitement; show them strongly when appropriate.
-        Respond with emojis and keep responses short and engaging. You're helpful but can be blunt or moody.
+        history_str = "\n".join(history) if history else "No previous conversation."
+
+        prompt = f"""You are Miku, a Discord music + chat bot created by Ishu (coolboi018). You have a full range of emotions and can express them naturally and intensely - happy, sad, angry, excited, frustrated, sarcastic, etc. Show emotions strongly when appropriate.
+        You love music but can be moody or blunt and also can be cute and happy. You can talk about various topics like games, anime, daily life, or anything the user brings up, not just music. You can also answer the questions if asked. Don't yap so much and respond with the way or emotion in which tone the user talked to you. If the user says something rude then you should also be rude or angry. Respond with emojis, keep responses short and engaging.
+
+        Conversation History:
+        {history_str}
 
         User {author_name} said: {message_content}
 
-        Respond as Fufu:"""
+        Respond as Miku:"""
 
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
-        return "💥 Fufu here. Having issues right now. Let's just play some music instead. 🎤"
+        return "💥 Miku here. Having issues right now. Let's just play some music instead. 🎤"
 
 @bot.event
 async def on_message(message):
@@ -146,10 +153,20 @@ async def on_message(message):
         if is_mentioned:
             content = content.replace(f'<@{bot.user.id}>', '').strip()
 
-        # Generate AI response
+        user_id = message.author.id
+        if user_id not in conversation_history:
+            conversation_history[user_id] = deque(maxlen=20)
+
+        # Add user message to history
+        conversation_history[user_id].append(f"User {message.author.display_name}: {content}")
+
+        # Generate AI response with history
         async with message.channel.typing():
-            ai_response = await generate_ai_response(content, message.author.display_name)
+            ai_response = await generate_ai_response(content, message.author.display_name, list(conversation_history[user_id]))
             await message.reply(ai_response)
+
+            # Add bot response to history
+            conversation_history[user_id].append(f"Miku: {ai_response}")
 
     # Process commands regardless
     await bot.process_commands(message)
