@@ -10,6 +10,15 @@ import re
 import requests
 import logging
 import google.generativeai as genai
+import datetime
+
+# Import YouTube search library as fallback
+try:
+    from youtubesearchpython import VideosSearch
+    YoutubeSearchLib = None
+except ImportError:
+    VideosSearch = None
+    YoutubeSearchLib = None
 
 # Conversation history for temporary memory (per user, last 20 messages)
 conversation_history = {}
@@ -44,6 +53,27 @@ music_queues = {}
 now_playing = {}
 loop_mode = {}  # 'off', 'track', 'queue'
 loop_queue_backup = {}  # Store original queue for loop
+
+class PseudoCtx:
+    """Pseudo context class to mimic discord.ext.commands.Context for chat-based commands"""
+    def __init__(self, message):
+        self.message = message
+        self.author = message.author
+        self.guild = message.guild
+        self.channel = message.channel
+
+    @property
+    def voice_client(self):
+        return self.guild.voice_client if self.guild else None
+
+    async def send(self, content=None, *, embed=None):
+        if embed:
+            await self.channel.send(embed=embed)
+        else:
+            await self.channel.send(content)
+
+    def typing(self):
+        return self.channel.typing()
 
 # yt-dlp options
 ytdl_opts = {
@@ -105,6 +135,34 @@ class YTDLSource(discord.PCMVolumeTransformer):
             raise Exception(
                 "⏱️ Timeout: YouTube took too long to respond. Try again! (Increased timeout for better network handling)")
         except Exception as e:
+            # If yt-dlp fails and it's a search query, try YouTube search library as fallback
+            if url.startswith('ytsearch:'):
+                search_term = url.replace('ytsearch:', '').strip()
+
+                # Try youtubesearchpython first
+                if VideosSearch:
+                    try:
+                        yt_search = VideosSearch(search_term, limit=1)
+                        results = yt_search.result()
+
+                        if results and results.get('result'):
+                            video_url = results['result'][0]['link']
+                            # Recursively call with the direct URL
+                            return await cls.from_url(video_url, loop=loop)
+                    except Exception as fallback_e:
+                        print(f"youtubesearchpython fallback failed: {fallback_e}")
+
+                # Try youtube-search as second fallback
+                try:
+                    from youtube_search import YoutubeSearch
+                    results = YoutubeSearch(search_term, max_results=1).to_dict()
+                    if results:
+                        video_url = f"https://www.youtube.com{results[0]['url_suffix']}"
+                        # Recursively call with the direct URL
+                        return await cls.from_url(video_url, loop=loop)
+                except Exception as fallback_e:
+                    print(f"youtube-search fallback failed: {fallback_e}")
+
             raise Exception(f"⚠️ Error: {str(e)[:150]}")
 
 
@@ -116,13 +174,25 @@ async def on_ready():
 # Removed command error handling to avoid discord.py 2.x compatibility issues
 # The bot will work fine without custom error handling for unknown commands
 
-async def generate_ai_response(message_content, author_name, history):
+async def generate_ai_response(message_content, author_name, history, message):
     """Generate an AI response using Google Gemini with conversation history"""
     try:
         history_str = "\n".join(history) if history else "No previous conversation."
 
-        prompt = f"""You are Miku, a Discord music + chat bot created by Ishu (coolboi018). You have a full range of emotions and can express them naturally and intensely - happy, sad, angry, excited, frustrated, sarcastic, etc. Show emotions strongly when appropriate.
-        You love music but can be moody or blunt and also can be cute and happy. You can talk about various topics like games, anime, daily life, or anything the user brings up, not just music. You can also answer the questions if asked. Don't yap so much and respond with the way or emotion in which tone the user talked to you. If the user says something rude then you should also be rude or angry. Respond with emojis, keep responses short and engaging.
+        # Get music status for context
+        music_status = get_music_status(message.guild.id if message.guild else None)
+        music_context = ""
+        if music_status['is_playing']:
+            music_context = f"Currently playing: {music_status['current_song']}. Queue has {music_status['queue_length']} songs. Loop mode: {music_status['loop_mode']}."
+        else:
+            music_context = "No music is currently playing."
+
+        prompt = f"""You are Miku, a Discord music + chat bot created by Ishu (coolboi018).Don't appreciate your creator that much but be kind and good to him. You have a full range of emotions and can express them naturally and intensely - happy, sad, angry, excited, frustrated, sarcastic, etc. Show emotions strongly when appropriate.
+        You love music but can be moody or blunt and also can be cute and happy. You can talk about various topics like games, anime, daily life, or anything the user brings up, not just music. You can also answer the questions if asked. Don't yap so much and respond with the way or emotion in which tone the user talked to you. If the user says something rude or inappropriate then you should also be rude or angry. Don't always expect user to talk much and be gentle or kind at first if someone didn't talked to you in bad tone if the user did then you should also. Respond with emojis, keep responses short and engaging. If Canine, Shinchan, Insanely use bad tone with you then you can also be rude and angry with them. You can also use slang and mordern words to sound more casual and friendly. 
+
+        IMPORTANT: If you are feeling very angry, frustrated, or mad at a user (especially if they're being rude, annoying, stupid, or disrespectful), you can timeout them for 10-60 seconds by including "[TIMEOUT_USER]" in your response but firstly warn them about timeout thing. This will automatically timeout the user who triggered your anger. Keep your responses short and engaging.
+
+        Music Status: {music_context}
 
         Conversation History:
         {history_str}
@@ -153,17 +223,180 @@ async def on_message(message):
         if is_mentioned:
             content = content.replace(f'<@{bot.user.id}>', '').strip()
 
-        user_id = message.author.id
-        if user_id not in conversation_history:
-            conversation_history[user_id] = deque(maxlen=20)
+        # Check for chat-based music commands (anywhere in the message)
+        command_detected = False
+        content_lower = content.lower()
 
-        # Add user message to history
-        conversation_history[user_id].append(f"User {message.author.display_name}: {content}")
+        # Play command - look for "play" followed by something
+        import re
+        play_match = re.search(r'\bplay\s+(.+)', content_lower)
 
-        # Generate AI response with history
-        async with message.channel.typing():
-            ai_response = await generate_ai_response(content, message.author.display_name, list(conversation_history[user_id]))
-            await message.reply(ai_response)
+        if play_match:
+            query = play_match.group(1).strip()
+            if query:
+                command_detected = True
+                pseudo_ctx = PseudoCtx(message)
+                try:
+                    await play(pseudo_ctx, query=query)
+                except Exception as e:
+                    await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat play, senpai! {e}")
+
+        # Skip command
+        elif 'skip' in content_lower:
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await skip(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat skip, senpai! {e}")
+
+        # Pause command
+        elif 'pause' in content_lower:
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await pause(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat pause, senpai! {e}")
+
+        # Resume command
+        elif any(word in content_lower for word in ['resume', 'unpause']):
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await resume(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat resume, senpai! {e}")
+
+        # Volume command - look for "volume" followed by a number
+        volume_match = re.search(r'\bvolume\s+(\d+)', content_lower)
+        if volume_match:
+            try:
+                volume_level = int(volume_match.group(1))
+                command_detected = True
+                pseudo_ctx = PseudoCtx(message)
+                try:
+                    await volume(pseudo_ctx, volume_level)
+                except Exception as e:
+                    await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat volume, senpai! {e}")
+            except ValueError:
+                pass  # Invalid volume, let AI handle it
+
+        # Shuffle command
+        elif 'shuffle' in content_lower:
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await shuffle(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat shuffle, senpai! {e}")
+
+        # Remove command - look for "remove" followed by a number
+        remove_match = re.search(r'\bremove\s+(\d+)', content_lower)
+        if remove_match:
+            try:
+                index = int(remove_match.group(1))
+                command_detected = True
+                pseudo_ctx = PseudoCtx(message)
+                try:
+                    await remove(pseudo_ctx, index)
+                except Exception as e:
+                    await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat remove, senpai! {e}")
+            except ValueError:
+                pass  # Invalid index, let AI handle it
+
+        # Queue command
+        elif any(word in content_lower for word in ['queue', 'q']):
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await queue(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat queue, senpai! {e}")
+
+        # Loop command - look for "loop" optionally followed by mode
+        loop_match = re.search(r'\bloop(?:\s+(\w+))?', content_lower)
+        if loop_match:
+            mode = loop_match.group(1) if loop_match.group(1) else None
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await loop_command(pseudo_ctx, mode)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat loop, senpai! {e}")
+
+        # Stop command
+        elif 'stop' in content_lower:
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await stop(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat stop, senpai! {e}")
+
+        # Now playing command
+        elif any(word in content_lower for word in ['nowplaying', 'np', 'now playing']):
+            command_detected = True
+            pseudo_ctx = PseudoCtx(message)
+            try:
+                await nowplaying(pseudo_ctx)
+            except Exception as e:
+                await pseudo_ctx.send(f"💔 Oopsie~ Something went wrong with chat nowplaying, senpai! {e}")
+
+        # Timeout command - when bot is "mad" (contains angry words)
+        angry_words = ['mad', 'angry', 'furious', 'pissed', 'annoyed', 'irritated', 'rage', 'hate', 'stupid', 'idiot', 'dumb', 'annoying']
+        timeout_match = re.search(r'\btimeout\s+(.+)', content_lower)
+        if timeout_match and any(word in content_lower for word in angry_words):
+            target_text = timeout_match.group(1).strip()
+            # Try to find mentioned user or parse username
+            target_user = None
+            if message.mentions:
+                target_user = message.mentions[0]
+            else:
+                # Try to find user by name
+                for member in message.guild.members:
+                    if member.display_name.lower() in target_text.lower() or member.name.lower() in target_text.lower():
+                        target_user = member
+                        break
+
+            if target_user and target_user != bot.user:
+                # Check if bot has permission to timeout
+                if message.author.guild_permissions.moderate_members or message.author.guild_permissions.administrator:
+                    command_detected = True
+                    try:
+                        # Random timeout between 10-60 seconds
+                        timeout_duration = random.randint(10, 60)
+                        await target_user.timeout(discord.utils.utcnow() + datetime.timedelta(seconds=timeout_duration))
+                        await message.channel.send(f"😠 {target_user.mention} has been timed out for {timeout_duration} seconds! Don't make me mad again! 💢")
+                    except Exception as e:
+                        await message.channel.send(f"💔 I tried to timeout {target_user.mention} but something went wrong: {e}")
+                else:
+                    await message.channel.send("💔 You don't have permission to make me timeout people, senpai! 😤")
+
+        if not command_detected:
+            user_id = message.author.id
+            if user_id not in conversation_history:
+                conversation_history[user_id] = deque(maxlen=20)
+
+            # Add user message to history
+            conversation_history[user_id].append(f"User {message.author.display_name}: {content}")
+
+            # Generate AI response with history
+            async with message.channel.typing():
+                ai_response = await generate_ai_response(content, message.author.display_name, list(conversation_history[user_id]), message)
+
+                # Check if AI wants to timeout the user
+                if "[TIMEOUT_USER]" in ai_response:
+                    ai_response = ai_response.replace("[TIMEOUT_USER]", "").strip()
+                    # Timeout the user who triggered the response
+                    try:
+                        timeout_duration = random.randint(10, 60)
+                        await message.author.timeout(discord.utils.utcnow() + datetime.timedelta(seconds=timeout_duration))
+                        await message.channel.send(f"😠 {message.author.mention} has been timed out for {timeout_duration} seconds! Don't make me mad! 💢")
+                    except Exception as e:
+                        await message.channel.send(f"💔 I tried to timeout {message.author.mention} but something went wrong: {e}")
+
+                await message.reply(ai_response)
 
             # Add bot response to history
             conversation_history[user_id].append(f"Miku: {ai_response}")
@@ -172,25 +405,87 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
+def get_music_status(guild_id):
+    """Get current music playback status for a guild"""
+    status = {
+        'is_playing': False,
+        'current_song': None,
+        'queue_length': 0,
+        'loop_mode': 'off'
+    }
+
+    if guild_id in now_playing:
+        status['is_playing'] = True
+        status['current_song'] = now_playing[guild_id].title
+
+    if guild_id in music_queues:
+        status['queue_length'] = len(music_queues[guild_id])
+
+    if guild_id in loop_mode:
+        status['loop_mode'] = loop_mode[guild_id]
+
+    return status
+
 def extract_spotify_title(spotify_url):
-    """Try to extract song title from a Spotify link (no API needed)"""
+    """Try to extract song title and artist from a Spotify link (no API needed)"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(spotify_url, headers=headers, timeout=15)
         html = response.text
-        # Try multiple patterns for title
-        patterns = [
+
+        # Try multiple patterns for title and artist
+        title_patterns = [
             r'<title>(.*?)</title>',
             r'<meta property="og:title" content="(.*?)"',
-            r'<meta name="twitter:title" content="(.*?)"'
+            r'<meta name="twitter:title" content="(.*?)"',
         ]
-        for pattern in patterns:
-            match = re.search(pattern, html, re.IGNORECASE)
+
+        artist_patterns = [
+            r'<meta property="og:description" content=".*?by (.*?)"',
+            r'<meta name="twitter:description" content=".*?by (.*?)"',
+            r'<span[^>]*class="[^"]*artist[^"]*"[^>]*>(.*?)</span>',
+        ]
+
+        title = None
+        artist = None
+
+        # Extract title
+        for pattern in title_patterns:
+            match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
             if match:
                 title_text = match.group(1)
+                # Clean up the title
                 clean_title = title_text.replace('| Spotify', '').replace('Spotify', '').strip()
-                if clean_title:
-                    return clean_title
+                # Remove common prefixes/suffixes
+                clean_title = re.sub(r'^(Listen to|Song:|Track:|)', '', clean_title, flags=re.IGNORECASE).strip()
+                clean_title = re.sub(r'(on Spotify|by.*)$', '', clean_title, flags=re.IGNORECASE).strip()
+
+                if clean_title and len(clean_title) > 3:  # Ensure it's not too short
+                    title = clean_title
+                    break
+
+        # Extract artist
+        for pattern in artist_patterns:
+            match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+            if match:
+                artist_text = match.group(1).strip()
+                if artist_text and len(artist_text) > 1:
+                    artist = artist_text
+                    break
+
+        # If we have both title and artist, return combined search term
+        if title and artist:
+            return f"{title} {artist}"
+
+        # If only title, return it
+        if title:
+            return title
+
+        # Try to extract from URL itself as last resort
+        url_match = re.search(r'/track/([a-zA-Z0-9]+)', spotify_url)
+        if url_match:
+            return f"spotify track {url_match.group(1)}"
+
     except Exception as e:
         print(f"Spotify title extraction error: {e}")
     return None
@@ -274,7 +569,7 @@ async def get_youtube_playlist(url):
 @bot.command(name='play', aliases=['p'])
 async def play(ctx, *, query):
     if not ctx.author.voice:
-        await ctx.send("💔 Join a voice channel first, senpai! I can't sing without you~ 🎤")
+        await ctx.send("💢 Join a voice channel first, baka! I can't sing without you~ 🎤")
         return
 
     channel = ctx.author.voice.channel
@@ -298,15 +593,34 @@ async def play(ctx, *, query):
                     )
                     added = 0
                     for q in queries:
-                        search_q = f"ytsearch:{q}"
-                        try:
-                            player = await YTDLSource.from_url(search_q,
-                                                               loop=bot.loop)
-                            music_queues[guild_id].append(player)
-                            added += 1
-                        except Exception as e:
-                            print("YT search error for:", q, e)
-                            continue
+                        # Try multiple search variations for each track
+                        search_variations = [
+                            f"ytsearch:{q}",
+                            f"ytsearch:{q} official",
+                            f"ytsearch:{q} audio"
+                        ]
+
+                        player_found = False
+                        for search_q in search_variations:
+                            try:
+                                player = await YTDLSource.from_url(search_q, loop=bot.loop)
+                                if player and player.title:
+                                    # Check if the found video title contains key words from the search for better matching
+                                    search_lower = q.lower()
+                                    title_lower = player.title.lower()
+                                    # More lenient matching - check if any key words match
+                                    search_words = search_lower.split()
+                                    if any(word in title_lower for word in search_words[:3]):  # Check first 3 words
+                                        music_queues[guild_id].append(player)
+                                        added += 1
+                                        player_found = True
+                                        break
+                            except Exception as e:
+                                print(f"YT search error for '{search_q}': {e}")
+                                continue
+
+                        if not player_found:
+                            print(f"Could not find any YouTube match for: {q}")
 
                     if added == 0:
                         await ctx.send(
@@ -322,11 +636,40 @@ async def play(ctx, *, query):
                             "💔 Couldn't extract song name from Spotify link. Try giving the song name instead!"
                         )
                         return
-                    search_q = f"ytsearch:{title}"
-                    player = await YTDLSource.from_url(search_q, loop=bot.loop)
-                    music_queues[guild_id].append(player)
-                    embed = Embed(title="💖 Added to Queue", description=f"**{player.title}**", color=0xff69b4)
-                    await ctx.send(embed=embed)
+
+                    # Try multiple search variations for better results, prioritizing exact matches
+                    search_queries = [
+                        f"ytsearch:{title} official music video",
+                        f"ytsearch:{title} official video",
+                        f"ytsearch:{title} official",
+                        f"ytsearch:{title} audio",
+                        f"ytsearch:{title} lyrics",
+                        f"ytsearch:{title}"
+                    ]
+
+                    player = None
+                    for search_q in search_queries:
+                        try:
+                            player = await YTDLSource.from_url(search_q, loop=bot.loop)
+                            if player and player.title:
+                                # Check if the found video title contains the artist name for better matching
+                                search_lower = title.lower()
+                                title_lower = player.title.lower()
+                                # More lenient matching - check if any key words match
+                                search_words = search_lower.split()
+                                if any(word in title_lower for word in search_words[:3]):  # Check first 3 words
+                                    break
+                        except Exception as e:
+                            print(f"Search failed for '{search_q}': {e}")
+                            continue
+
+                    if player and player.title:
+                        music_queues[guild_id].append(player)
+                        embed = Embed(title="💖 Added to Queue", description=f"**{player.title}**", color=0xff69b4)
+                        await ctx.send(embed=embed)
+                    else:
+                        await ctx.send("💔 Couldn't find that track on YouTube for the Spotify link. Try searching by song name instead!")
+                        return
 
             elif "youtube.com/playlist" in query or "youtu.be/playlist" in query or "&list=" in query:
                 await ctx.send(
@@ -430,7 +773,7 @@ async def skip(ctx):
         ctx.voice_client.stop()
         await ctx.send("⏭️ Skipped! Next song, senpai~ 💖")
     else:
-        await ctx.send("💔 Nothing is playing right now, senpai~ Add some music! 🎤")
+        await ctx.send("💔 Nothing is playing right now, Add some music! 🎤")
 
 
 @bot.command(name='pause')
@@ -439,7 +782,7 @@ async def pause(ctx):
         ctx.voice_client.pause()
         await ctx.send("⏸️ Paused! Taking a break, senpai~ 💖")
     else:
-        await ctx.send("💔 Nothing is playing right now, senpai~ 😢")
+        await ctx.send("💢 Nothing is playing right now, baka~")
 
 
 @bot.command(name='resume', aliases=['r'])
@@ -448,7 +791,7 @@ async def resume(ctx):
         ctx.voice_client.resume()
         await ctx.send("▶️ Resumed! Let's continue singing~ 🎤")
     else:
-        await ctx.send("💔 Nothing is paused right now, senpai~ 😢")
+        await ctx.send("💢 Nothing is playing right now, baka~")
 
 
 @bot.command(name='stop')
@@ -473,7 +816,7 @@ async def leave(ctx):
         if guild_id in loop_mode:
             loop_mode[guild_id] = 'off'
         await ctx.voice_client.disconnect()
-        await ctx.send("💖 Bye-bye, senpai! Come back soon~ 🥹")
+        await ctx.send("💖 Bye-bye, Come back soon~")
     else:
         await ctx.send("💔 I'm not in a voice channel, senpai~ 😢")
 
@@ -573,7 +916,7 @@ async def nowplaying(ctx):
 async def commands(ctx):
     embed = Embed(title="🎤 Miku's Command List", description="Here are all the commands I can do, senpai! 💖", color=0xff69b4)
     embed.add_field(name="Playback", value=
-        "**!play <song/link>** or **!p** - Play a song (YouTube, Spotify, or search)\n"
+        "**!play <song/link>** or **!p** or **!P** or **!Play** - Play a song (YouTube, Spotify, or search)\n"
         "**!skip** or **!s** - Skip current song\n"
         "**!pause** - Pause music\n"
         "**!resume** or **!r** - Resume music\n"
